@@ -1,5 +1,5 @@
 # Example Multi-stage Azure Pipelines for Sitecore
-> Note: This is an extremely naive example of CI/CD pipelines for a QA and production environment meant to demonstrate how the fundamentals of YAML pipelines and templates.
+> Note: This is an extremely naive example of CI/CD pipelines for a QA and production environment that is only meant to demonstrate he fundamentals of YAML pipelines and templates.
 
 ## Templates
 The [templates](templates/README.md) folder contains the stage templates for builds and deployments. These referenced from [`qa-pipeline.yml`](qa-pipeline.yml) and [`prod-pipeline.yml`](prod-pipeline.yml).
