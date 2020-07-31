@@ -1,0 +1,42 @@
+# CI/CD Pipeline for QA
+
+# This is used for versioning
+name: '$(BuildDefinitionName)_$(Year:yyyy).$(Month).$(DayOfMonth)$(Rev:.r)'
+
+# Triggers for this pipeline
+# This pipeline is batched, so multiple triggers in rapid succession will be grouped together as a single run
+# Documentation files will not trigger a build
+trigger:
+  batch: true
+  branches:
+    include:
+    - qa
+  paths:
+    exclude:
+    - '*.md'
+    - 'README.md'
+
+# Pull requests to a custom "qa" branch
+# Deployments will not be triggered.
+pr: qa
+
+# The CI/CD Stages
+stages:
+
+# CI - Build
+- template: templates/build.yml
+  parameters:
+    configuration: QA
+    solution: MySolution.sln
+
+# CD - Deploy
+- template: templates/deploy.yml
+  parameters:
+    environment: QA
+    # This should be the name of the Az service connection 
+    # configured in the Azure DevOps project settings
+    azSubscription: 'My Azure Subscription'
+    # This should be the name of the Az resource group to deploy to
+    azResourceGroup: 'mysite-qa'
+    # This should be the name of the Az app service
+    azAppname: 'mysite-qa-single'

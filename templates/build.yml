@@ -1,0 +1,120 @@
+# CI Build Template
+
+# Parameters to pass to the template
+# NOTE: The solution and configuration parameters are required
+# Notes about configuration vs buildConfiguration (currently not implemented): 
+# - configuration meta-data used for naming stages/jobs/artifacts and also used as the build configuration
+parameters:
+- name: name
+  default: build
+- name: platform
+  default: Any CPU
+- name: configuration
+  default: Release
+- name: image
+  default: 'windows-latest'
+- name: solution
+  default: ''
+- name: enableCodeCoverage
+  type: boolean
+  default: true
+- name: 'preBuild'
+  type: stepList
+  default: []
+- name: 'postBuild'
+  type: stepList
+  default: []
+- name: 'prePublish'
+  type: stepList
+  default: []
+
+stages:
+
+# The build stage
+- stage: ${{ parameters.name }}
+  displayName: 'Build and Test'
+  jobs:
+  - job: ${{ parameters.name }}
+    displayName: 'Build and Test'
+
+    # What VM Image to use
+    # At the moment, only Windows images are supported by Sitecore
+    pool:
+      vmImage: ${{ parameters.image }}
+    steps:
+
+    # Check for required parameters.
+    # Fail if they aren't found
+    - bash: |
+        if [ -z "$SOLUTION" ]; then
+          echo "##vso[task.logissue type=error;]Missing template parameter \"solution\""
+          echo "##vso[task.complete result=Failed;]"
+        fi
+        if [ -z "$CONFIGURATION" ]; then
+          echo "##vso[task.logissue type=error;]Missing template parameter \"configuration\""
+          echo "##vso[task.complete result=Failed;]"
+        fi
+      env:
+        SOLUTION: ${{ parameters.solution }}
+        CONFIGURATION: ${{ parameters.configuration }}
+      displayName: Check for required parameters
+
+    # Install NuGet
+    - task: NuGetToolInstaller@0
+      displayName: Install NuGet
+
+    # Restore NuGet packages
+    - task: NuGetCommand@2
+      displayName: NuGet Restore
+      inputs:
+        restoreSolution: '${{ parameters.solution }}'
+        feedsToUse: config
+        nugetConfigPath: 'NuGet.config'
+
+    # Custom pre-build steps passed to the template
+    - ${{ parameters.preBuild }}
+
+    # Build the solution
+    # Configuraiton transforms are disabled during build and will be applied during the deployment.
+    # Note: We're always using the Release configuration for builds.
+    - task: VSBuild@1
+      displayName: Build Solution
+      inputs:
+        solution: '${{ parameters.solution }}'
+        msbuildArgs: '/p:DeployOnBuild=true;PublishProfile=${{ parameters.configuration }};PublishUrl=$(build.artifactstagingdirectory) /p:AutoParameterizationWebConfigConnectionStrings=false /p:MarkWebConfigAssistFilesAsExclude=false /p:ProfileTransformWebConfigEnabled=false /p:TransformWebConfigEnabled=false'
+        platform: ${{ parameters.platform }}
+        configuration: ${{ parameters.configuration }}
+
+    # Custom post-build steps passed to the template
+    - ${{ parameters.postBuild }}
+
+    # Run unit tests
+    # Publishing code coverage results is optinal
+    - task: VSTest@2
+      displayName: Run Unit Tests
+      inputs:
+        testAssemblyVer2: |
+         **\*test*.dll
+         !**\obj\**
+         !**\*testadapter.dll
+        platform: '${{ parameters.platform }}'
+        configuration: '${{ parameters.configuration }}'
+        codeCoverageEnabled: ${{ parameters.enableCodeCoverage }}
+
+    # Publish symbols
+    # Currently disabled since there's little\no value from this at the moment
+    - task: PublishSymbols@2
+      displayName: Publish symbols path
+      inputs:
+        SearchPattern: '**\bin\**\*.pdb'
+        PublishSymbols: false
+      continueOnError: true
+      enabled: false
+
+    # Custom pre-publish steps passed to the template
+    - ${{ parameters.prePublish }}
+
+    # Publish the build artifact
+    # This will be used during subsequent deployments
+    - publish: '$(Build.ArtifactStagingDirectory)'
+      artifact: '${{ parameters.configuration }}-drop'

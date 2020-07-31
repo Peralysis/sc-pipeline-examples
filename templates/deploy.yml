@@ -1,0 +1,154 @@
+# CD Deploy Template
+
+# Parameters to pass to the template
+# NOTE: The environment, azSubscription, azResourceGroup and azAppName parameters are required
+parameters:
+- name: name
+  default: deploy
+- name: environment
+  default: release
+- name: dependsOn
+  default: build
+- name: image
+  default: 'windows-latest'
+- name: azSubscription
+  default: ''
+- name: azResourceGroup
+  default: ''
+- name: azAppName
+  default: ''
+
+stages:
+
+# The deploy stage
+# This is a typical Azure App Service Deployment
+# Pull requests will not trigger a deployment.
+- stage: ${{ parameters.name }}
+  displayName: 'Deploy (${{ parameters.environment }})'
+  dependsOn: ${{ parameters.dependsOn }}
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  variables:
+    Release.EnvironmentName: ${{ parameters.environment }}
+  jobs:
+  - deployment: ${{ parameters.environment }}
+    pool:
+      vmImage: ${{ parameters.image }}
+    environment: ${{ parameters.environment }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+
+          # Check for required parameters.
+          # Fail if they aren't found
+          - bash: |
+              if [ -z "$ENVIRONMENT" ]; then
+                echo "##vso[task.logissue type=error;]Missing template parameter \"environment\""
+                echo "##vso[task.complete result=Failed;]"
+              fi
+              if [ -z "$SUBSCRIPTION" ]; then
+                echo "##vso[task.logissue type=error;]Missing template parameter \"azSubscription\""
+                echo "##vso[task.complete result=Failed;]"
+              fi
+              if [ -z "$RESOURCE_GROUP" ]; then
+                echo "##vso[task.logissue type=error;]Missing template parameter \"azResourceGroup\""
+                echo "##vso[task.complete result=Failed;]"
+              fi
+              if [ -z "$APP_NAME" ]; then
+                echo "##vso[task.logissue type=error;]Missing template parameter \"azAppName\""
+                echo "##vso[task.complete result=Failed;]"
+              fi
+            env:
+              ENVIRONMENT: ${{ parameters.environment }}
+              SUBSCRIPTION: ${{ parameters.azSubscription }}
+              RESOURCE_GROUP: ${{ parameters.azResourceGroup }} 
+              APP_NAME: ${{ parameters.azAppName }} 
+            displayName: Check for required parameters
+
+          # Download the artifacts for this environment
+          - download: current
+            artifact: '${{ parameters.environment }}-drop'
+
+          # Delete transforms for other environments
+          - task: DeleteFiles@1
+            displayName: 'Delete foreign transform files'
+            inputs:
+              SourceFolder: '$(Pipeline.Workspace)/${{ parameters.environment }}-drop'
+              ${{ if eq(parameters.environment, 'QA') }}:
+                Contents: |
+                 **\*.Debug.config
+                 **\*.UAT.config
+                 **\*.CM.config
+                 **\*.CD.config
+              ${{ if eq(parameters.environment, 'UAT') }}:
+                Contents: |
+                 **\*.Debug.config
+                 **\*.QA.config
+                 **\*.CM.config
+                 **\*.CD.config
+              ${{ if eq(parameters.environment, 'CM') }}:
+                Contents: |
+                 **\*.Debug.config
+                 **\*.QA.config
+                 **\*.UAT.config
+                 **\*.CD.config
+              ${{ if eq(parameters.environment, 'CD') }}:
+                Contents: |
+                 **\*.Debug.config
+                 **\*.QA.config
+                 **\*.UAT.config
+                 **\*.CM.config
+
+          # Deploy to the Azure App Service
+          # We will deploy to a staging slot, swap with production slot and then disable the staging slot
+          # If site initialization/warmup is configured correctly, there should be no noticeable downtime.
+          # This will also apply transforms for this environment
+          # This task will clean up transformed files after it's done
+          - task: AzureRmWebAppDeployment@4
+            displayName: 'Deploy Azure App Service'
+            inputs:
+              azureSubscription: '${{ parameters.azSubscription }}'
+              WebAppName: '${{ parameters.azAppName }}'
+              deployToSlotOrASE: true
+              ResourceGroupName: '${{ parameters.azResourceGroup }}'
+              SlotName: staging
+              packageForLinux: '$(Pipeline.Workspace)/${{ parameters.environment }}-drop'
+              ScriptType: 'Inline Script'
+              InlineScript: |
+                del /q /f /s "*.Release.config"
+                del /q /f /s "*.${{ parameters.environment }}.config"
+              enableCustomDeployment: true
+              DeploymentType: zipDeploy
+              enableXmlTransform: true
+              enableXmlVariableSubstitution: true
+          
+          # Start up the staging deployment slot
+          - task: AzureAppServiceManage@0
+            displayName: 'Start Staging Slot'
+            inputs:
+              azureSubscription: '${{ parameters.azSubscription }}'
+              Action: 'Start Azure App Service'
+              WebAppName: '${{ parameters.azAppName }}'
+              SpecifySlotOrASE: true
+              ResourceGroupName: '${{ parameters.azResourceGroup }}'
+              Slot: staging
+
+          # Swap the production deployment slot with the staging slot
+          - task: AzureAppServiceManage@0
+            displayName: 'Swap Staging Slot'
+            inputs:
+              azureSubscription: '${{ parameters.azSubscription }}'
+              WebAppName: '${{ parameters.azAppName }}'
+              ResourceGroupName: '${{ parameters.azResourceGroup }}'
+              SourceSlot: staging
+
+          # Stop the staging slot now that we are done with it
+          - task: AzureAppServiceManage@0
+            displayName: 'Stop Staging Slot'
+            inputs:
+              azureSubscription: '${{ parameters.azSubscription }}'
+              Action: 'Stop Azure App Service'
+              WebAppName: '${{ parameters.azAppName }}'
+              SpecifySlotOrASE: true
+              ResourceGroupName: '${{ parameters.azResourceGroup }}'
+              Slot: staging
